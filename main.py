@@ -56,28 +56,26 @@ tool_executor.register_tool(TimeConversionTool())
 
 MAX_TOOL_ITERATIONS_PER_TURN = 5 # Max tool uses before forcing a text response or ending turn
 
-async def execute_conversation_turn(messages_history: list, system_prompt: typing.Optional[str] = None):
-    """Processes a single turn of the conversation, handling tool use if necessary."""
-    logger.debug(f"Executing turn. Current history depth: {len(messages_history)}")
-    logger.debug(f"Messages before API call: {messages_history}")
+async def execute_conversation_turn(messages_for_api: list, system_prompt: typing.Optional[str] = None) -> list:
+    """Processes a single turn, appends assistant's response to messages_for_api and returns it."""
+    logger.debug(f"Executing turn. Current messages for API depth: {len(messages_for_api)}")
+    logger.debug(f"Messages before API call: {messages_for_api}")
     if system_prompt:
         logger.debug(f"Using system prompt for this turn: {system_prompt}")
 
-    # The loop here is to handle sequential tool use if Claude decides to use multiple tools
-    # or make multiple attempts before a final answer for *this specific user input*.
     for _ in range(MAX_TOOL_ITERATIONS_PER_TURN):
-        assistant_response_content_blocks = [] # To build the assistant's turn
+        assistant_response_content_blocks = []
         full_claude_response_obj = None
         text_generated_this_iteration = False
         tool_calls_made_this_iteration = False
 
-        with Live(Spinner("dots", text="Claude is thinking..."), console=console, transient=True, refresh_per_second=10) as live_spinner:
+        with Live(Spinner("dots", text="Claude is thinking..."), console=console, transient=True, refresh_per_second=10):
             try:
                 api_params = {
-                    "model": "claude-3-5-haiku-20241022",
-                    "max_tokens": 4096,
+                    "model": "claude-3-haiku-20240307", # Reverted to a known good model for now, user can change back
+                    "max_tokens": 2048, # Reverted for now
                     "tools": tool_executor.get_all_tool_schemas(),
-                    "messages": messages_history,
+                    "messages": messages_for_api, # Use the passed list directly for the API call
                 }
                 if system_prompt:
                     api_params["system"] = system_prompt
@@ -87,18 +85,14 @@ async def execute_conversation_turn(messages_history: list, system_prompt: typin
             except anthropic.APIError as e:
                 logger.error(f"Anthropic API Error: {e}")
                 console.print(Panel(f"[bold red]API Error:[/bold red] {e}", title="[bold red]Error[/bold red]"))
-                # Add error as assistant message to history IF it makes sense for the flow
-                # For now, we return and let the REPL decide if it wants to retry or inform user.
-                # If we add to history, ensure it's in the correct format.
-                # messages_history.append({"role": "assistant", "content": [{"type": "text", "text": f"I encountered an API error: {e}"}]}) 
-                return # Indicate failure to the caller
+                messages_for_api.append({"role": "assistant", "content": [{"type": "text", "text": f"I encountered an API error: {e}"}]})
+                return messages_for_api 
         
         if not full_claude_response_obj or not full_claude_response_obj.content:
             logger.warning("Received empty or no content from Claude.")
             console.print(Panel("Claude returned an empty response.", title="[bold red]System Message[/bold red]"))
-            # Add an assistant message indicating this empty response to history
-            messages_history.append({"role": "assistant", "content": [{"type": "text", "text": "I received an empty response from the model."}]})
-            return
+            messages_for_api.append({"role": "assistant", "content": [{"type": "text", "text": "I received an empty response from the model."}]})
+            return messages_for_api
 
         for content_block in full_claude_response_obj.content:
             if content_block.type == "text":
@@ -116,15 +110,16 @@ async def execute_conversation_turn(messages_history: list, system_prompt: typin
                     console.print(Panel(str(content_block.input), title=f"[bold yellow]Tool Call Requested: {content_block.name}[/bold yellow]"))
                 assistant_response_content_blocks.append({"type": "tool_use", "id": content_block.id, "name": content_block.name, "input": content_block.input})
         
-        # Append Claude's response (text and/or tool uses) to history
         if assistant_response_content_blocks:
-            messages_history.append({"role": "assistant", "content": assistant_response_content_blocks})
-            logger.debug(f"Appended assistant response to history: {assistant_response_content_blocks}")
+            messages_for_api.append({"role": "assistant", "content": assistant_response_content_blocks})
+            logger.debug(f"Appended assistant response to messages_for_api: {assistant_response_content_blocks}")
 
         if full_claude_response_obj.stop_reason == "tool_use":
             tool_results_for_next_iteration = []
             actual_tool_use_found = False
-            for block in assistant_response_content_blocks: # Iterate over what we just added
+            # Iterate over the assistant message we *just added* to messages_for_api
+            last_assistant_message_content = messages_for_api[-1]["content"]
+            for block in last_assistant_message_content:
                 if block["type"] == "tool_use":
                     actual_tool_use_found = True
                     tool_name = block["name"]
@@ -143,71 +138,61 @@ async def execute_conversation_turn(messages_history: list, system_prompt: typin
                     })
             
             if actual_tool_use_found and tool_results_for_next_iteration:
-                messages_history.append({"role": "user", "content": tool_results_for_next_iteration}) # This is a "user" message containing tool_results
-                logger.debug(f"Appended tool results to messages for next iteration: {tool_results_for_next_iteration}")
-                # Continue the loop to let Claude process the tool results
-            elif not actual_tool_use_found:
-                logger.warning("Stop reason was tool_use, but no tool_use blocks found in THIS assistant message. Breaking tool loop.")
-                # This case should be rare if API is consistent.
-                # If there was text, it was printed. If not, Claude might be stuck.
-                return # Exit turn processing
-            else: # tool use indicated but no results generated (e.g. all tools failed internally without throwing to executor)
-                logger.warning("Tool use indicated but no tool results generated. Breaking tool loop.")
-                return # Exit turn processing
+                messages_for_api.append({"role": "user", "content": tool_results_for_next_iteration})
+                logger.debug(f"Appended tool results for next API call: {tool_results_for_next_iteration}")
+                # Continue loop for Claude to process tool results
+            else: # No tool use found, or no results generated. Stop this turn.
+                logger.warning("Tool use indicated by stop_reason, but no valid tool calls/results processed. Ending turn.")
+                return messages_for_api 
         
         elif full_claude_response_obj.stop_reason in ["end_turn", "max_tokens"]:
             if not text_generated_this_iteration and not tool_calls_made_this_iteration:
-                 logger.warning(f"Claude returned an empty or unexpected response. Stop reason: {full_claude_response_obj.stop_reason}")
-                 if not any(c.type == 'text' for c in assistant_response_content_blocks):
-                    # Ensure assistant says something if it truly produced nothing textual after stop_reason=end_turn
+                 logger.warning(f"Claude returned no text and no tool calls. Stop reason: {full_claude_response_obj.stop_reason}")
+                 # Ensure assistant says something if it truly produced nothing textual after stop_reason=end_turn
+                 # Check if the last message was already an empty one from us
+                 if not (messages_for_api and messages_for_api[-1]["role"] == "assistant" and 
+                         any(c.get("text") == "I received an empty response from the model." or c.get("text") == "I didn't produce a textual response for that." for c in messages_for_api[-1]["content"])):
                     no_text_msg = "I didn't produce a textual response for that."
-                    messages_history.append({"role": "assistant", "content": [{"type": "text", "text": no_text_msg}]})
-                    # console.print(Panel(no_text_msg, title="[bold red]System Message[/bold red]")) # Already handled by empty response check earlier potentially
-            # If there was text or even just a tool call request that didn't result in further tool_use stop_reason,
-            # it means this iteration is Claude's final response for the user's query.
+                    messages_for_api.append({"role": "assistant", "content": [{"type": "text", "text": no_text_msg}]})
             logger.success(f"Turn ended. Stop reason: {full_claude_response_obj.stop_reason}")
-            return # Exit the turn processing, back to REPL for new user input
+            return messages_for_api 
         else:
             logger.error(f"Unhandled stop reason: {full_claude_response_obj.stop_reason}")
             console.print(Panel(f"Unhandled stop reason: {full_claude_response_obj.stop_reason}", title="[bold red]System Error[/bold red]"))
-            return # Exit turn processing
+            return messages_for_api 
 
-    # If loop finishes due to MAX_TOOL_ITERATIONS_PER_TURN
     logger.warning(f"Reached max tool iterations ({MAX_TOOL_ITERATIONS_PER_TURN}) for this turn.")
-    console.print(Panel(f"Reached max tool iterations ({MAX_TOOL_ITERATIONS_PER_TURN}). Claude will now attempt to respond without further tools.", title="[bold orange]System Warning[/bold orange]"))
-    # Optionally, send one last message to Claude asking it to summarize or respond without tools.
-    # For simplicity now, we just return, and the REPL will await new user input. The history contains the last state.
-
+    console.print(Panel(f"Reached max tool iterations ({MAX_TOOL_ITERATIONS_PER_TURN}).", title="[bold orange]System Warning[/bold orange]"))
+    return messages_for_api
 
 async def main_repl():
     console.print(Panel("[bold]Calc Agent Initializing...[/bold]", title_align="center"))
-    messages_history = []
+    
+    overall_messages_history = [] # This will maintain the full conversation history
 
-    # 1. System prompt for welcome message
     welcome_system_prompt = "You are a helpful and friendly assistant. Your user is named Leck. Start your very first message with the exact phrase: 'Welcome, Leck, I am your assistant!'. After this greeting, you can ask how you can help or wait for Leck's first query. Do not use any tools for this initial greeting."
-    messages_history.append({"role": "system", "content": welcome_system_prompt})
-    logger.info(f"Added system prompt for welcome: {welcome_system_prompt}")
+    logger.info(f"Defined system prompt for welcome: {welcome_system_prompt}")
 
-    # 2. Dummy user message to trigger the welcome
-    initial_user_greeting = "Greetings, assistant!"
-    messages_history.append({"role": "user", "content": initial_user_greeting})
-    logger.info(f"Added initial dummy user greeting: {initial_user_greeting}")
+    # Prepare messages for the very first API call (welcome message)
+    initial_user_greeting_message = {"role": "user", "content": "Greetings, assistant!"}
+    messages_for_welcome_call = [initial_user_greeting_message]
+    logger.info(f"Messages for welcome call: {messages_for_welcome_call}")
 
-    # 3. Get Claude's welcome message
     console.print(Panel("[italic]Claude is preparing its welcome message...[/italic]"))
-    await execute_conversation_turn(messages_history, system_prompt=welcome_system_prompt)
-    # The welcome message should have been printed by execute_conversation_turn and added to history.
+    # Get the welcome response; execute_conversation_turn will append Claude's response to messages_for_welcome_call
+    updated_messages_after_welcome = await execute_conversation_turn(messages_for_welcome_call, system_prompt=welcome_system_prompt)
+    overall_messages_history.extend(updated_messages_after_welcome) # Add the initial exchange to overall history
 
     console.print(Panel("[bold cyan]Interactive session started. Type 'exit' to end.[/bold cyan]"))
 
-    # 4. Main REPL loop
+    loop = asyncio.get_event_loop()
     while True:
         try:
-            user_input = await asyncio.to_thread(console.input, "[bold cyan]Leck[/bold cyan]: ")
+            user_input = await loop.run_in_executor(None, console.input, "[bold cyan]Leck[/bold cyan]: ")
         except KeyboardInterrupt:
             console.print("\n[bold orange]Exiting on KeyboardInterrupt...[/bold orange]")
             break
-        except EOFError: # Happens if stdin is closed, e.g. piping input
+        except EOFError: 
             console.print("\n[bold orange]Exiting on EOF...[/bold orange]")
             break
 
@@ -215,15 +200,15 @@ async def main_repl():
             console.print("[bold orange]Exiting agent.[/bold orange]")
             break
         
-        if not user_input.strip(): # Handle empty input
+        if not user_input.strip(): 
             continue
 
         logger.info(f"User REPL Input: {user_input}")
-        messages_history.append({"role": "user", "content": user_input})
+        overall_messages_history.append({"role": "user", "content": user_input})
         
-        await execute_conversation_turn(messages_history)
-        # The execute_conversation_turn now appends all its work to messages_history directly
-        # and prints output using the console.
+        # Pass the current state of overall_messages_history for the API call
+        # execute_conversation_turn will modify and return it
+        overall_messages_history = await execute_conversation_turn(overall_messages_history) 
 
 if __name__ == "__main__":
     try:
