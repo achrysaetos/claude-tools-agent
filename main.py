@@ -194,7 +194,7 @@ async def main_repl():
     loop = asyncio.get_event_loop()
     while True:
         try:
-            user_input = await loop.run_in_executor(None, console.input, "[bold cyan]Leck[/bold cyan]: ")
+            user_input = await loop.run_in_executor(None, console.input, "[bold cyan]User[/bold cyan]: ")
         except KeyboardInterrupt:
             console.print("\n[bold orange]Exiting on KeyboardInterrupt...[/bold orange]")
             break

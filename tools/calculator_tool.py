@@ -23,6 +23,8 @@ class CalculatorTool(ToolBase):
             if num2 == 0:
                 return "Error: Division by zero"
             return num1 / num2
+        elif operator == "^":
+            return num1 ** num2
         else:
             return "Invalid operator"
 
