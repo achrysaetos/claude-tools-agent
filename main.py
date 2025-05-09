@@ -12,6 +12,9 @@ from tools import (
     PercentageTool,
     TemperatureConversionTool,
     TimeConversionTool,
+    CreateDirectoryTool,
+    HTMLGeneratorTool,
+    PlanningTool,
     # Enums are not strictly needed here for registration but good for clarity if used directly
     # TemperatureUnit, 
     # TimeUnit
@@ -52,6 +55,9 @@ tool_executor.register_tool(CalculatorTool())
 tool_executor.register_tool(PercentageTool())
 tool_executor.register_tool(TemperatureConversionTool())
 tool_executor.register_tool(TimeConversionTool())
+tool_executor.register_tool(CreateDirectoryTool())
+tool_executor.register_tool(HTMLGeneratorTool())
+tool_executor.register_tool(PlanningTool())
 # ---
 
 MAX_TOOL_ITERATIONS_PER_TURN = 5 # Max tool uses before forcing a text response or ending turn
