@@ -176,7 +176,7 @@ async def main_repl():
     
     overall_messages_history = [] # This will maintain the full conversation history
 
-    welcome_system_prompt = "You are a helpful and friendly assistant. Your user is named Leck. Start your very first message with the exact phrase: 'Welcome, Leck, I am your assistant!'. After this greeting, you can ask how you can help or wait for Leck's first query. Do not use any tools for this initial greeting."
+    welcome_system_prompt = "You are a helpful and friendly assistant. Start your very first message with the exact phrase: 'Welcome, I am your assistant!'. After this greeting, you can ask how you can help or wait for their first query. Do not use any tools for this initial greeting."
     logger.info(f"Defined system prompt for welcome: {welcome_system_prompt}")
 
     # Prepare messages for the very first API call (welcome message)
