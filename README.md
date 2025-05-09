@@ -33,7 +33,9 @@ The agent can handle queries such as:
 1. Clone this repository
 2. Install dependencies:
    ```
-   pip install -r requirements.txt
+   uv venv
+   source .venv/bin/activate
+   uv pip install -r requirements.txt
    ```
 3. Create a `.env` file in the project root with your Anthropic API key:
    ```
@@ -44,5 +46,9 @@ The agent can handle queries such as:
 Run the application with:
 
 ```
-python3 main.py
+uv run main.py
 ```
+
+## Screenshots
+
+![Screenshot of Calc Agent in action](screenshot.png)
