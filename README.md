@@ -1,4 +1,4 @@
-# Calc Agent - A Claude-powered AI Assistant with Tool Use
+# Calc Agent - Claude-powered Calculator Using Tool Calls
 
 ## Overview
 Calc Agent is a Python-based AI assistant that uses Anthropic's Claude API to handle mathematical calculations, unit conversions, and other utility tasks in a conversational manner. The agent is built without relying on any AI framework (like LangChain or OpenAI Agents), implementing a custom tool execution system and conversation loop.
